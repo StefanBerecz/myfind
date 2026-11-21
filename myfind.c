@@ -10,27 +10,52 @@
 #include <dirent.h>
 //für strcmp() - strings vergleichen
 #include <string.h>
+//für strcasecmp
+#include <strings.h>
+//für PATH_MAX und NAME_MAX
+#include <limits.h>
 
 
-int searchFile(const char *path, const char *fileName) {
+int searchFile(const char *path, const char *fileName, int iFlag, int rFlag) {
   int found = 0;
   struct dirent *entry;
   DIR *dir = opendir(path);
+  //error handling on opendir
   if (dir == NULL) {
     perror(path);
     return -1;
   }
+
   while ((entry = readdir(dir)) != NULL) {
-    if (strcmp(entry->d_name, fileName) == 0) {
-      //Dieses output wird umformuliert und in einem nameless pipe gefürht.
-      printf("%ld: %s: %s/%s\n", (long)getpid(),fileName, path, entry->d_name);
+    //Eintrag für selbst, und parent-Ordner überspringen
+    if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+      continue;
+    }
+    if (rFlag) {
+      //Prüfen ob entry ein Ordner ist
+      char pathRec[PATH_MAX];
+      sprintf(pathRec, "%s/%s", path, entry->d_name);
+      struct stat entryStat;
+      stat(pathRec, &entryStat);
+      if (S_ISDIR(entryStat.st_mode)) {
+        //falls entry ein Ordner ist dann Rekursion bauen
+        //neuer Pfad ist path + / + entryname
+        //entries mit . und .. überspringen
+        searchFile(pathRec,fileName, iFlag, rFlag);
+      }
+    }
+    //iFlag wird zuerst ausgewertet
+    //Falls ein Vergleich gefunden wird 0 == 0 --> 1
+    int match = iFlag == 1 ? strcasecmp(entry->d_name, fileName) == 0 : strcmp(entry->d_name, fileName) == 0;
+    if (match) {
+      //maximal pfadlänge + maximale Namenslänge + 32 Stellen für pid und filler Characters bei der Ausgabe
+      char result[PATH_MAX+NAME_MAX+32];
+      snprintf(result, sizeof(result), "%ld: %s: %s/%s\n", (long)getpid(),fileName, path, entry->d_name);
+      printf("%s",result);
       found++;
     }
   }
   closedir(dir);
-  if (!found) {
-    printf("nothing found\n");
-  }
   return found;
 }
 
@@ -93,15 +118,15 @@ int main(int argc, char* argv[]){
   searchpath = argv[optind];
   //searchpath soll für Gültigkeit überprüft werden???
   //prüfe ob searchpath existiert - liefert -1 falls Pfad nicht existent, oder keine Berechtigung
-  struct stat test;
-  int statReturn = stat(searchpath, &test);
+  struct stat searchpathStat;
+  int statReturn = stat(searchpath, &searchpathStat);
   if (statReturn == -1) {
     perror(searchpath);
     return EXIT_FAILURE;
   }
   //prüfe ob das ein Verzeichnis ist
   //in st. mode ist Typ vom file und die Zugriffberechtigungen gespeichert
-  if (!S_ISDIR(test.st_mode)) {
+  if (!S_ISDIR(searchpathStat.st_mode)) {
     fprintf(stderr, "%s is not a directory\n", searchpath);
     return EXIT_FAILURE;
   }
@@ -121,7 +146,7 @@ int main(int argc, char* argv[]){
   printf("searchinputs:\n");
   for (int i = 0; i < searchParameterSize; i++) {
     printf("%d. input: %s \n",i+1, searchInputs[i]);
-    searchFile(fullpath, searchInputs[i]);
+    searchFile(fullpath, searchInputs[i], iFlag, rFlag);
   }
 
   free(fullpath);
