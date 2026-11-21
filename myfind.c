@@ -3,6 +3,9 @@
 #include <unistd.h>
 #include <assert.h>
 #include <sys/stat.h>
+//für realpath()
+#include <stdlib.h>
+
 
 
 void printUsage(char *program_name){
@@ -62,8 +65,25 @@ int main(int argc, char* argv[]){
   int searchParameterSize = argc -optind -1;
   char *searchInputs[searchParameterSize];
   searchpath = argv[optind];
-  //searchpath soll überprüft werden???
+  //searchpath soll für Gültigkeit überprüft werden???
+  //prüfe ob searchpath existiert - liefert -1 falls Pfad nicht existent, oder keine Berechtigung??
   struct stat test;
+  int statReturn = stat(searchpath, &test);
+  if (statReturn == -1) {
+    perror(searchpath);
+    return 1;
+  }
+  //prüfe ob das ein Verzeichnis ist
+  //in st. mode ist Typ vom file und die Zugriffberechtigungen gespeichert
+  if (!S_ISDIR(test.st_mode)) {
+    fprintf(stderr, "%s is not a directory\n", searchpath);
+    return 1;
+  }
+  //searchpath ist korrekt
+  //funkt für relative und absoluter pfad auch
+  //realpath gleich im Parent setzen, damit alle forks diese erben
+  char *fullpath = realpath(searchpath, NULL);
+  printf("The full path is: %s\n", fullpath);
   optind++;
   for (int i = 0; i < searchParameterSize; i++) {
     searchInputs[i] = argv[optind];
