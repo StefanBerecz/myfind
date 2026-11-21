@@ -27,21 +27,18 @@ int searchFile(const char *path, const char *fileName, int iFlag, int rFlag) {
   }
 
   while ((entry = readdir(dir)) != NULL) {
+    //kompletter Pfad für die Rückgabe/Rekursion
+    char entryPath[PATH_MAX];
+    snprintf(entryPath, sizeof(entryPath), "%s/%s", path, entry->d_name);
     //Eintrag für selbst, und parent-Ordner überspringen
     if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
       continue;
     }
     if (rFlag) {
       //Prüfen ob entry ein Ordner ist
-      char pathRec[PATH_MAX];
-      sprintf(pathRec, "%s/%s", path, entry->d_name);
-      struct stat entryStat;
-      stat(pathRec, &entryStat);
-      if (S_ISDIR(entryStat.st_mode)) {
-        //falls entry ein Ordner ist dann Rekursion bauen
-        //neuer Pfad ist path + / + entryname
-        //entries mit . und .. überspringen
-        searchFile(pathRec,fileName, iFlag, rFlag);
+
+      if (entry->d_type == DT_DIR) {
+        found = searchFile(entryPath,fileName, iFlag, rFlag);
       }
     }
     //iFlag wird zuerst ausgewertet
@@ -50,7 +47,7 @@ int searchFile(const char *path, const char *fileName, int iFlag, int rFlag) {
     if (match) {
       //maximal pfadlänge + maximale Namenslänge + 32 Stellen für pid und filler Characters bei der Ausgabe
       char result[PATH_MAX+NAME_MAX+32];
-      snprintf(result, sizeof(result), "%ld: %s: %s/%s\n", (long)getpid(),fileName, path, entry->d_name);
+      snprintf(result, sizeof(result), "%ld: %s: %s \n", (long)getpid(),fileName, entryPath);
       printf("%s",result);
       found++;
     }
