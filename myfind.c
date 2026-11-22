@@ -14,9 +14,12 @@
 #include <strings.h>
 //für PATH_MAX und NAME_MAX
 #include <limits.h>
+//für fork(), waitpid() und pid_t
+#include <sys/types.h>
+#include <sys/wait.h>
 
 
-int searchFile(const char *path, const char *fileName, int iFlag, int rFlag) {
+int searchFile(const char *path, const char *fileName, int iFlag, int rFlag, int outFd) {
   int found = 0;
   struct dirent *entry;
   DIR *dir = opendir(path);
@@ -38,7 +41,11 @@ int searchFile(const char *path, const char *fileName, int iFlag, int rFlag) {
       //Prüfen ob entry ein Ordner ist
 
       if (entry->d_type == DT_DIR) {
-        found = searchFile(entryPath,fileName, iFlag, rFlag);
+        //Treffer aus Subfoldern addieren, -1 (Ordner nicht lesbar) ignorieren
+        int subFound = searchFile(entryPath, fileName, iFlag, rFlag, outFd);
+        if (subFound > 0) {
+          found += subFound;
+        }
       }
     }
     //iFlag wird zuerst ausgewertet
@@ -47,8 +54,11 @@ int searchFile(const char *path, const char *fileName, int iFlag, int rFlag) {
     if (match) {
       //maximal pfadlänge + maximale Namenslänge + 32 Stellen für pid und filler Characters bei der Ausgabe
       char result[PATH_MAX+NAME_MAX+32];
-      snprintf(result, sizeof(result), "%ld: %s: %s \n", (long)getpid(),fileName, entryPath);
-      printf("%s",result);
+      int len = snprintf(result, sizeof(result), "%ld: %s: %s\n", (long)getpid(),fileName, entryPath);
+      //ganze Zeile mit write() in die Pipe schreiben
+      if (write(outFd, result, len) == -1) {
+        perror("write");
+      }
       found++;
     }
   }
@@ -131,6 +141,10 @@ int main(int argc, char* argv[]){
   //funkt für relative und absoluter pfad auch
   //realpath gleich im Parent setzen, damit alle forks diese erben
   char *fullpath = realpath(searchpath, NULL);
+  if (fullpath == NULL) {
+    perror(searchpath);
+    return EXIT_FAILURE;
+  }
   printf("The full path is: %s\n", fullpath);
 
   optind++;
@@ -143,9 +157,75 @@ int main(int argc, char* argv[]){
   printf("searchinputs:\n");
   for (int i = 0; i < searchParameterSize; i++) {
     printf("%d. input: %s \n",i+1, searchInputs[i]);
-    searchFile(fullpath, searchInputs[i], iFlag, rFlag);
+  }
+
+  //pipe vor den forks anlegen, damit alle Childs sie erben
+  //fd[0] = Leseende, fd[1] = Schreibende
+  int fd[2];
+  if (pipe(fd) == -1) {
+    perror("pipe");
+    free(fullpath);
+    return EXIT_FAILURE;
+  }
+
+  //stdout-Puffer leeren, sonst erbt jeder Child den Inhalt und gibt ihn doppelt aus
+  fflush(stdout);
+
+  //für jeden Suchbegriff einen Child-Prozess starten
+  int childCount = 0;
+  for (int i = 0; i < searchParameterSize; i++) {
+    pid_t pid = fork();
+    if (pid == -1) {
+      //keine weiteren Childs starten, bereits gestartete aber noch einsammeln
+      perror("fork");
+      break;
+    }
+    if (pid == 0) {
+      //Child: Leseende wird nicht gebraucht
+      close(fd[0]);
+      int found = searchFile(fullpath, searchInputs[i], iFlag, rFlag, fd[1]);
+      close(fd[1]);
+      free(fullpath);
+      //Child muss hier enden, sonst forkt er in der Schleife selbst weiter
+      exit(found < 0 ? EXIT_FAILURE : EXIT_SUCCESS);
+    }
+    //Parent: zählen, wie viele Childs laufen
+    childCount++;
+  }
+
+  //Parent: eigenes Schreibende schließen, sonst liefert read() nie EOF
+  close(fd[1]);
+
+  //Pipe bis EOF lesen und auf stdout ausgeben
+  //EOF kommt erst, wenn alle Childs ihr Schreibende geschlossen haben
+  char buffer[4096];
+  ssize_t bytesRead;
+  while ((bytesRead = read(fd[0], buffer, sizeof(buffer))) > 0) {
+    if (write(STDOUT_FILENO, buffer, bytesRead) == -1) {
+      perror("write stdout");
+      break;
+    }
+  }
+  if (bytesRead == -1) {
+    perror("read");
+  }
+  close(fd[0]);
+
+  //alle Childs einsammeln -> keine Zombies
+  int exitCode = EXIT_SUCCESS;
+  while (childCount > 0) {
+    int status;
+    if (waitpid(-1, &status, 0) == -1) {
+      perror("waitpid");
+      exitCode = EXIT_FAILURE;
+      break;
+    }
+    childCount--;
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != EXIT_SUCCESS) {
+      exitCode = EXIT_FAILURE;
+    }
   }
 
   free(fullpath);
-  return EXIT_SUCCESS;
+  return exitCode;
 }
