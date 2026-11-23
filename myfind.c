@@ -70,6 +70,22 @@ void printUsage(char *program_name){
   fprintf(stderr,"Usage: %s [-R] [-i] searchpath filename1 ... filenameN\n", program_name);
 }
 
+/*
+Parallelisierung und synchronisierte Ausgabe:
+
+Der Parent legt vor dem Forken eine unnamed pipe an und startet für jeden
+Dateinamen einen Child-Prozess mit fork(). Die Childs suchen parallel und
+erben die Pipe. Jede Ergebniszeile "<pid>: <filename>: <pfad>\n" wird im
+Child vollständig in einem Puffer aufgebaut und mit genau einem write() in
+das Schreibende der Pipe geschrieben.
+
+Nur der Parent schreibt auf stdout: Er liest die Pipe bis EOF und gibt die
+Daten unverändert aus. Damit gibt es auf stdout nur einen Schreiber, die
+Zeilen bleiben vollständig lesbar, ihre Reihenfolge ist unsortiert.
+
+Der Parent liest die Pipe aus, bevor er wartet und sammelt danach alle
+Childs mit waitpid() ein, damit keine Zombie-Prozesse entstehen.
+*/
 int main(int argc, char* argv[]){
   int c;    //getopt return value
   const char *options = "Ri";
@@ -111,12 +127,6 @@ int main(int argc, char* argv[]){
     printUsage(progName);
     return EXIT_FAILURE;
   }
-  if (rFlag ==1) {
-    printf("Recursive search is set\n");
-  }
-  if (iFlag == 1) {
-    printf("Ignore capitalization is set\n");
-  }
 
   //optind counts up from 1 - ignores argv[0] - filename
   //Hier wissen wir schon wie viele Suchparameter vorhanden sind
@@ -145,18 +155,11 @@ int main(int argc, char* argv[]){
     perror(searchpath);
     return EXIT_FAILURE;
   }
-  printf("The full path is: %s\n", fullpath);
 
   optind++;
   for (int i = 0; i < searchParameterSize; i++) {
     searchInputs[i] = argv[optind];
     optind++;
-  }
-
-  printf("searchpath is %s\n", searchpath );
-  printf("searchinputs:\n");
-  for (int i = 0; i < searchParameterSize; i++) {
-    printf("%d. input: %s \n",i+1, searchInputs[i]);
   }
 
   //pipe vor den forks anlegen, damit alle Childs sie erben
